@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+# claude-insights-run — invoke `/insights` via Claude Code on each configured repo.
+#
+# Reads the repo list from $INSIGHTS_CONFIG (default: ~/.config/claude-insights/repos.conf).
+# Each non-empty, non-comment line is one of:
+#   - a path to a git repo                 → run there
+#   - a path to a directory of repos       → recurse to find .git children
+#
+# Per repo, runs:        claude -p "/insights"  (cwd = repo)
+# Output goes to:        $INSIGHTS_STATE_DIR/repos/<slug>/output/<timestamp>.md
+# Last-run marker:       $INSIGHTS_STATE_DIR/repos/<slug>/last-run
+#
+# Designed to be invoked DAILY by cron; per-repo cadence is enforced by
+# $INSIGHTS_MIN_INTERVAL_DAYS (default 7), so a missed daily run is retried
+# the next day rather than skipped for a week.
+
+set -euo pipefail
+
+CONFIG="${INSIGHTS_CONFIG:-$HOME/.config/claude-insights/repos.conf}"
+STATE_DIR="${INSIGHTS_STATE_DIR:-$HOME/.local/state/claude-insights}"
+MIN_INTERVAL_DAYS="${INSIGHTS_MIN_INTERVAL_DAYS:-7}"
+CLAUDE_BIN="${CLAUDE_BIN:-claude}"
+SLASH_COMMAND="${INSIGHTS_COMMAND:-/insights}"
+TIMEOUT_SECONDS="${INSIGHTS_TIMEOUT_SECONDS:-1800}"
+EXTRA_FLAGS="${INSIGHTS_CLAUDE_FLAGS:---permission-mode bypassPermissions}"
+MAX_DEPTH="${INSIGHTS_SCAN_DEPTH:-4}"
+
+log() { printf '[%s] %s\n' "$(date -Iseconds)" "$*" >&2; }
+
+if [[ ! -f "$CONFIG" ]]; then
+  log "no config at $CONFIG"
+  log "create it with one repo path or search root per line (see examples/repos.conf.example)"
+  exit 2
+fi
+
+if ! command -v "$CLAUDE_BIN" >/dev/null 2>&1; then
+  log "'$CLAUDE_BIN' not found in PATH"
+  exit 3
+fi
+
+mkdir -p "$STATE_DIR/runs"
+RUN_TS="$(date +%Y%m%dT%H%M%S)"
+RUN_LOG="$STATE_DIR/runs/$RUN_TS.log"
+exec > >(tee -a "$RUN_LOG") 2>&1
+
+slug() {
+  printf '%s' "$1" | sed -e 's|^/||' -e 's|/|-|g' -e 's|[^A-Za-z0-9_.-]|_|g'
+}
+
+discover() {
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%%#*}"
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    [[ -z "$line" ]] && continue
+    line="${line/#\~/$HOME}"
+    if [[ -d "$line/.git" ]]; then
+      printf '%s\n' "$line"
+    elif [[ -d "$line" ]]; then
+      find "$line" -mindepth 1 -maxdepth "$MAX_DEPTH" -type d -name .git -prune \
+        -exec dirname {} \;
+    else
+      log "skipping missing path: $line"
+    fi
+  done < "$CONFIG" | sort -u
+}
+
+within_interval() {
+  local marker="$1"
+  [[ -f "$marker" ]] || return 1
+  local mtime
+  mtime="$(stat -c %Y "$marker" 2>/dev/null || stat -f %m "$marker")"
+  (( $(date +%s) - mtime < MIN_INTERVAL_DAYS * 86400 ))
+}
+
+run_one() {
+  local repo="$1"
+  local s; s="$(slug "$repo")"
+  local repo_state="$STATE_DIR/repos/$s"
+  local marker="$repo_state/last-run"
+  mkdir -p "$repo_state/output"
+
+  if within_interval "$marker"; then
+    log "skip (within ${MIN_INTERVAL_DAYS}d)  $repo"
+    return 0
+  fi
+
+  local out="$repo_state/output/$RUN_TS.md"
+  local err="$repo_state/output/$RUN_TS.err"
+  log "run                       $repo"
+
+  local rc=0
+  ( cd "$repo" && timeout "$TIMEOUT_SECONDS" "$CLAUDE_BIN" $EXTRA_FLAGS -p "$SLASH_COMMAND" ) \
+    >"$out" 2>"$err" || rc=$?
+
+  if (( rc == 0 )); then
+    : > "$marker"
+    ln -sfn "$RUN_TS.md" "$repo_state/output/latest.md"
+    log "ok ($(wc -c <"$out") bytes)        $repo"
+  else
+    log "FAIL rc=$rc              $repo"
+    log "  stderr: $err"
+  fi
+}
+
+main() {
+  mapfile -t repos < <(discover)
+  if (( ${#repos[@]} == 0 )); then
+    log "no repos discovered from $CONFIG"
+    exit 0
+  fi
+  log "starting — ${#repos[@]} repo(s)"
+  local failures=0
+  for repo in "${repos[@]}"; do
+    run_one "$repo" || failures=$((failures + 1))
+  done
+  log "done (failures=$failures, log=$RUN_LOG)"
+  exit $(( failures > 0 ? 1 : 0 ))
+}
+
+main "$@"

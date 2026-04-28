@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# claude-insights-install — install or refresh the daily cron entry.
+#
+# The runner is invoked daily; it only acts on repos whose last run is older
+# than $INSIGHTS_MIN_INTERVAL_DAYS, so the effective cadence is weekly.
+#
+# Override default schedule via env: INSIGHTS_HOUR, INSIGHTS_MINUTE.
+# Default: 03:15 local time daily.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+RUNNER="$SCRIPT_DIR/claude-insights-run"
+HOUR="${INSIGHTS_HOUR:-3}"
+MINUTE="${INSIGHTS_MINUTE:-15}"
+TAG="# claude-insights"
+LOG="$HOME/.local/state/claude-insights/cron.log"
+
+[[ -x "$RUNNER" ]] || chmod +x "$RUNNER"
+
+mkdir -p "$(dirname "$LOG")"
+
+current="$(crontab -l 2>/dev/null || true)"
+filtered="$(grep -vF "$TAG" <<<"$current" | grep -vF "$RUNNER" || true)"
+
+new_entry="$MINUTE $HOUR * * * $RUNNER >> $LOG 2>&1 $TAG"
+
+{
+  printf '%s\n' "$filtered" | sed '/^$/d'
+  printf '%s\n' "$new_entry"
+} | crontab -
+
+echo "Installed:"
+crontab -l | grep -F "$RUNNER"
+echo
+echo "Logs: $LOG"
+echo "State: ${INSIGHTS_STATE_DIR:-$HOME/.local/state/claude-insights}"
+echo "Config: ${INSIGHTS_CONFIG:-$HOME/.config/claude-insights/repos.conf}"

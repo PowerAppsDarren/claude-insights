@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# claude-insights-uninstall — remove the cron entry installed by claude-insights-install.
+# Leaves state/logs intact.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+RUNNER="$SCRIPT_DIR/claude-insights-run"
+TAG="# claude-insights"
+
+current="$(crontab -l 2>/dev/null || true)"
+if [[ -z "$current" ]]; then
+  echo "no crontab; nothing to remove"
+  exit 0
+fi
+
+filtered="$(grep -vF "$TAG" <<<"$current" | grep -vF "$RUNNER" || true)"
+
+if [[ "$current" == "$filtered" ]]; then
+  echo "no claude-insights cron entry found"
+  exit 0
+fi
+
+printf '%s\n' "$filtered" | sed '/^$/d' | crontab -
+echo "removed claude-insights cron entry"

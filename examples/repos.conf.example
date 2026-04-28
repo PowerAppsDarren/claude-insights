@@ -1,0 +1,16 @@
+# claude-insights repos.conf
+#
+# One entry per line. Blank lines and lines starting with `#` are ignored.
+# Each entry is either:
+#   - a path that contains a .git directory  → that single repo
+#   - a path to a directory of repos         → all .git children up to depth 4
+#
+# `~` is expanded. Relative paths are NOT supported — use absolute.
+
+# Example: every repo under your code root
+~/code
+~/projects
+
+# Example: pin specific repos
+# /home/user/work/important-app
+# /home/user/personal/dotfiles

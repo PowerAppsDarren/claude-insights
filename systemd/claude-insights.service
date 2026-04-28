@@ -1,0 +1,13 @@
+[Unit]
+Description=Run /insights via Claude Code on configured repos
+Documentation=https://github.com/PowerAppsDarren/claude-insights
+
+[Service]
+Type=oneshot
+# Edit these paths if you installed elsewhere.
+ExecStart=%h/claude-insights/bin/claude-insights-run
+# Inherit a usable PATH so `claude` is found.
+Environment=PATH=%h/.local/bin:%h/bin:/usr/local/bin:/usr/bin:/bin
+# Resource caps (tune as needed)
+TimeoutStartSec=2h
+Nice=10

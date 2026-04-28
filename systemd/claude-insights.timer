@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily trigger for claude-insights (per-repo cadence enforced by the runner)
+
+[Timer]
+OnCalendar=*-*-* 03:15:00
+Persistent=true
+RandomizedDelaySec=15m
+Unit=claude-insights.service
+
+[Install]
+WantedBy=timers.target
